@@ -1,0 +1,31 @@
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "base-release",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "base-relwithdebinfo",
+      "inherits": "base-release",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build-dbginfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "base-debug",
+      "inherits": "base-release",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ]
+}

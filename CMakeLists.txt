@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.13)
 
-if (APPLE)
-    # if CMAKE_OSX_DEPLOYMENT_TARGET is not set, set it to 11.3
-    if (NOT CMAKE_OSX_DEPLOYMENT_TARGET)
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.3" CACHE STRING "Minimum OS X deployment version" FORCE)
-    endif ()
-    message(STATUS "CMAKE_OSX_DEPLOYMENT_TARGET: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
+message(STATUS "CMake version: ${CMAKE_VERSION}")
+message(STATUS "CMake generator: ${CMAKE_GENERATOR}")
+
+# Setting CMAKE_OSX_ARCHITECTURES needs to be done before calling project()
+if (APPLE AND NOT DEFINED CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES ${CMAKE_HOST_SYSTEM_PROCESSOR} CACHE STRING "" FORCE)
+    message(STATUS "CMAKE_OSX_ARCHITECTURES was not set manually. Setting to the host's native architecture (${CMAKE_HOST_SYSTEM_PROCESSOR})")
 endif ()
 
 project(OrcaSlicer)
@@ -14,48 +15,107 @@ include("version.inc")
 include(GNUInstallDirs)
 include(CMakeDependentOption)
 
+if (DEFINED ENV{SLIC3R_STATIC})
+    set(SLIC3R_STATIC_INITIAL $ENV{SLIC3R_STATIC})
+else ()
+    set(SLIC3R_STATIC_INITIAL 1)
+endif ()
+
+# Backward compatibility for old CMake versions
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_VERSION VERSION_LESS "3.25")
+    set(LINUX ON CACHE BOOL "" FORCE)
+endif ()
+
+# Set options and initialize variables
+option(SLIC3R_STATIC 			    "Compile OrcaSlicer with static libraries (Boost, TBB, glew)" ${SLIC3R_STATIC_INITIAL})
+option(SLIC3R_GUI    			    "Compile OrcaSlicer with GUI components (OpenGL, wxWidgets)" 1)
+option(SLIC3R_FHS                   "Assume OrcaSlicer is to be installed in a FHS directory structure" 0)
+option(SLIC3R_WX_STABLE             "Build against wxWidgets stable (3.0) as oppsed to dev (3.1) on Linux" 0)
+option(SLIC3R_PROFILE 			    "Compile OrcaSlicer with an invasive Shiny profiler" 0)
+option(SLIC3R_PCH                   "Use precompiled headers" 1)
+option(SLIC3R_MSVC_COMPILE_PARALLEL "Compile on Visual Studio in parallel" 1)
+option(SLIC3R_MSVC_PDB              "Generate PDB files on MSVC in Release mode" 1)
+option(SLIC3R_PERL_XS               "Compile XS Perl module and enable Perl unit and integration tests" 0)
+option(SLIC3R_ASAN                  "Enable ASan on Clang and GCC" 0)
+# Proposal for C++ unit tests and sandboxes
+option(SLIC3R_BUILD_SANDBOXES       "Build development sandboxes" OFF)
+option(SLIC3R_BUILD_TESTS           "Build unit tests" OFF)
+option(ORCA_TOOLS                   "Build Orca tools" OFF)
+option(BUILD_DEPS                   "Build dependencies" OFF)
+option(CLEAN_DEPS                   "Clean build directory dependencies. Only takes effect if also building deps." OFF)
+option(FORCE_DEPS                   "Force build dependencies even if there are no changes. CLEAN_DEPS takes priority. Only takes effect if also building deps." OFF)
+option(BUILD_DEPS_QUIET             "Don't output the logs from building deps" OFF)
+# If SLIC3R_FHS is enabled, forcibly disable desktop integration during runtime.
+CMAKE_DEPENDENT_OPTION(SLIC3R_DESKTOP_INTEGRATION "Allow performing desktop integration during runtime" 1 "NOT SLIC3R_FHS" 0)
+
+set(OPENVDB_FIND_MODULE_PATH "" CACHE PATH "Path to OpenVDB installation's find modules.")
+set(SLIC3R_GTK "3" CACHE STRING "GTK version to use with wxWidgets on Linux")
+set(IS_CROSS_COMPILE FALSE)
+set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "") # Disable deprecation warnings from dependencies built using old CMake versions
+set(CGAL_DATA_DIR ".") # Prevent warning from CGAL regarding data dir not being set. Orca does not use CGAL's data dir
+
+# Enable C++17 language standard.
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if (POLICY CMP0167) # FindBoost deprecated
+    # If required boost is set to at least 1.70, this policy should be set to NEW
+    cmake_policy(SET CMP0167 OLD)
+    set(CMAKE_POLICY_DEFAULT_CMP0167 OLD)
+endif ()
+
 set(SLIC3R_RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources")
 file(TO_NATIVE_PATH "${SLIC3R_RESOURCES_DIR}" SLIC3R_RESOURCES_DIR_WIN)
 
-if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  message(STATUS "No build type selected, default to Release")
-  set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type (default Release)" FORCE)
+get_filename_component(BIN_DIR_NAME ${CMAKE_BINARY_DIR} NAME)
+message(STATUS "CMAKE_BINARY_DIR: ${BIN_DIR_NAME}")
+set(BIN_DIR_NAME ${BIN_DIR_NAME} CACHE STRING "" FORCE)
+
+# Set the default build type to Release if not specified.
+if (NOT CMAKE_BUILD_TYPE)
+    message(STATUS "No build type selected, default to Release")
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type (default Release)" FORCE)
 endif()
 
-if(DEFINED ENV{SLIC3R_STATIC})
-        set(SLIC3R_STATIC_INITIAL $ENV{SLIC3R_STATIC})
-else()
-        if (MSVC OR MINGW OR APPLE)
-                set(SLIC3R_STATIC_INITIAL 1)
-        else()
-                set(SLIC3R_STATIC_INITIAL 0)
-        endif()
+if(NOT DEFINED BBL_RELEASE_TO_PUBLIC)
+    if (CMAKE_BUILD_TYPE STREQUAL "Release")
+        set(BBL_RELEASE_TO_PUBLIC 1)
+    else ()
+        set(BBL_RELEASE_TO_PUBLIC 0)
+    endif ()
 endif()
 
-option(SLIC3R_STATIC 			"Compile OrcaSlicer with static libraries (Boost, TBB, glew)" ${SLIC3R_STATIC_INITIAL})
-option(SLIC3R_GUI    			"Compile OrcaSlicer with GUI components (OpenGL, wxWidgets)" 1)
-option(SLIC3R_FHS               "Assume OrcaSlicer is to be installed in a FHS directory structure" 0)
-option(SLIC3R_WX_STABLE         "Build against wxWidgets stable (3.0) as oppsed to dev (3.1) on Linux" 0)
-option(SLIC3R_PROFILE 			"Compile OrcaSlicer with an invasive Shiny profiler" 0)
-option(SLIC3R_PCH               "Use precompiled headers" 1)
-option(SLIC3R_MSVC_COMPILE_PARALLEL "Compile on Visual Studio in parallel" 1)
-option(SLIC3R_MSVC_PDB          "Generate PDB files on MSVC in Release mode" 1)
-option(SLIC3R_PERL_XS           "Compile XS Perl module and enable Perl unit and integration tests" 0)
-option(SLIC3R_ASAN              "Enable ASan on Clang and GCC" 0)
-# If SLIC3R_FHS is 1 -> SLIC3R_DESKTOP_INTEGRATION is always 0, othrewise variable.
-CMAKE_DEPENDENT_OPTION(SLIC3R_DESKTOP_INTEGRATION "Allow perfoming desktop integration during runtime" 1 "NOT SLIC3R_FHS" 0)
+# Set compiler flags
+if ("${CMAKE_C_COMPILER_ID}" STREQUAL "GNU")
+    set(GNU_C TRUE)
+endif ()
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+    set(GNU TRUE)
+elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+    set(CLANG TRUE)
+elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
+    set(APPLECLANG TRUE)
+endif ()
+if (CLANG OR APPLECLANG)
+    set(CLANG_VARIANT TRUE)
+endif ()
 
-set(OPENVDB_FIND_MODULE_PATH "" CACHE PATH "Path to OpenVDB installation's find modules.")
+if (APPLE) # Set macOS target and determine if we are cross-compiling
+    # if CMAKE_OSX_DEPLOYMENT_TARGET is not set, set it to 11.3
+    if (NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.3" CACHE STRING "Minimum OS X deployment version" FORCE)
+    endif ()
+    message(STATUS "CMAKE_OSX_DEPLOYMENT_TARGET: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
 
-set(SLIC3R_GTK "2" CACHE STRING "GTK version to use with wxWidgets on Linux")
-
-set(IS_CROSS_COMPILE FALSE)
-
-if (APPLE)
     set(CMAKE_FIND_FRAMEWORK LAST)
     set(CMAKE_FIND_APPBUNDLE LAST)
-    list(FIND CMAKE_OSX_ARCHITECTURES ${CMAKE_SYSTEM_PROCESSOR} _arch_idx)
-    if (CMAKE_OSX_ARCHITECTURES AND _arch_idx LESS 0)
+    list(LENGTH CMAKE_OSX_ARCHITECTURES _arch_len)
+    if (_arch_len GREATER 1)
+        message(FATAL_ERROR "OrcaSlicer only supports building for one architecture at a time. Please make sure only one architecture is specified in CMAKE_OSX_ARCHITECTURES")
+    elseif (_arch_len EQUAL 1)
+        list(GET CMAKE_OSX_ARCHITECTURES 0 MACOS_ARCH)
+    endif ()
+    if (NOT "${MACOS_ARCH}" STREQUAL ${CMAKE_HOST_SYSTEM_PROCESSOR})
         set(IS_CROSS_COMPILE TRUE)
     endif ()
     if (CMAKE_MACOSX_BUNDLE)
@@ -64,17 +124,11 @@ if (APPLE)
     SET(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.softfever3d.orca-slicer")
 
     message(STATUS "Orca: IS_CROSS_COMPILE: ${IS_CROSS_COMPILE}")
-endif ()
-
-# Proposal for C++ unit tests and sandboxes
-option(SLIC3R_BUILD_SANDBOXES   "Build development sandboxes" OFF)
-option(SLIC3R_BUILD_TESTS       "Build unit tests" OFF)
-option(ORCA_TOOLS       "Build Orca tools" OFF)
-
-if (IS_CROSS_COMPILE)
-    message("Detected cross compilation setup. Tests and encoding checks will be forcedly disabled!")
-    set(SLIC3R_PERL_XS OFF CACHE BOOL "" FORCE)
-    set(SLIC3R_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    if (IS_CROSS_COMPILE)
+        message(STATUS "Detected cross compilation setup. Tests and encoding checks will be forcedly disabled!")
+        set(SLIC3R_PERL_XS OFF CACHE BOOL "" FORCE)
+        set(SLIC3R_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    endif ()
 endif ()
 
 # Print out the SLIC3R_* cache options
@@ -94,63 +148,83 @@ if(SLIC3R_DESKTOP_INTEGRATION)
     add_definitions(-DSLIC3R_DESKTOP_INTEGRATION)
 endif ()
 
-if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL Clang)
-    set(IS_CLANG_CL TRUE)
-
-    # clang-cl can interpret SYSTEM header paths if -imsvc is used
-    set(CMAKE_INCLUDE_SYSTEM_FLAG_CXX "-imsvc")
-
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall \
-        -Wno-old-style-cast -Wno-reserved-id-macro -Wno-c++98-compat-pedantic")
-else ()
-    set(IS_CLANG_CL FALSE)
-endif ()
-
-if (MSVC)
-    if (SLIC3R_MSVC_COMPILE_PARALLEL AND NOT IS_CLANG_CL)
-           add_compile_options(/MP)
-    endif ()
-    # /bigobj (Increase Number of Sections in .Obj file)
-    # error C3859: virtual memory range for PCH exceeded; please recompile with a command line option of '-Zm90' or greater
-    # Generate symbols at every build target, even for the release.
-    add_compile_options(-bigobj -Zm520 /Zi)
-    # Disable STL4007: Many result_type typedefs and all argument_type, first_argument_type, and second_argument_type typedefs are deprecated in C++17.
-    #FIXME Remove this line after eigen library adapts to the new C++17 adaptor rules.
-    add_compile_options(-D_SILENCE_CXX17_ADAPTOR_TYPEDEFS_DEPRECATION_WARNING)
-    # Disable warnings on conversion from unsigned to signed (possible loss of data)
-    # C4244: 'conversion' conversion from 'type1' to 'type2', possible loss of data. An integer type is converted to a smaller integer type.
-    # C4267: The compiler detected a conversion from size_t to a smaller type.
-    add_compile_options(/wd4244 /wd4267)
-    # Disable warnings on comparison of unsigned and signed
-    # C4018: signed/unsigned mismatch
-    add_compile_options(/wd4018)
-endif ()
-
-if (${CMAKE_CXX_COMPILER_ID} STREQUAL "AppleClang" AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER 15)
-    add_compile_definitions(BOOST_NO_CXX98_FUNCTION_BASE _HAS_AUTO_PTR_ETC=0)
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    message(STATUS "Automatically setting CMAKE_INSTALL_PREFIX")
+    message(STATUS "Default: ${CMAKE_INSTALL_PREFIX}")
+    set_property(CACHE CMAKE_INSTALL_PREFIX PROPERTY VALUE "${CMAKE_BINARY_DIR}/OrcaSlicer")
 endif()
 
-if (MINGW)
-    add_compile_options(-Wa,-mbig-obj)
+if ("${DEP_BUILD_DIR}" STREQUAL "")
+    set(DEP_BUILD_DIR "${CMAKE_SOURCE_DIR}/deps/${BIN_DIR_NAME}" CACHE PATH "Path to dependencies build directory" FORCE)
+    message(STATUS "DEP_BUILD_DIR: ${DEP_BUILD_DIR} (generated automatically and saved to cache)")
+    set(AUTOGENERATED_DEP_BUILD_DIR ${DEP_BUILD_DIR} CACHE PATH "Provides the last autogenerated DEP_BUILD_DIR" FORCE)
+else ()
+    message(STATUS "DEP_BUILD_DIR: ${DEP_BUILD_DIR} (from cache or command line)")
 endif ()
 
-if (NOT MSVC)
-    # ARMs (Raspberry PI) use an unsigned char by default. Let's make it consistent for OrcaSlicer on all platforms.
-    add_compile_options(-fsigned-char)
+
+if ("${CMAKE_PREFIX_PATH}" STREQUAL "" OR "${CMAKE_PREFIX_PATH}" STREQUAL "${AUTOGENERATED_PREFIX_PATH}")
+    if (DEFINED AUTOGENERATED_DEP_BUILD_DIR AND NOT "${DEP_BUILD_DIR}" STREQUAL "${AUTOGENERATED_DEP_BUILD_DIR}")
+        message(STATUS "CMAKE_PREFIX_PATH is being re-generated due to DEP_BUILD_DIR being manually updated")
+        set(REGEN_DESTDIR TRUE)
+        unset(AUTOGENERATED_DEP_BUILD_DIR CACHE)
+    endif ()
+    if (LINUX AND (NOT DEFINED USE_OLD_DESTDIR_PREV OR USE_OLD_DESTDIR_PREV) AND EXISTS "${DEP_BUILD_DIR}/destdir/usr/local" AND NOT EXISTS "${DEP_BUILD_DIR}/OrcaSlicer_dep/usr/local")
+        set(USE_OLD_DESTDIR TRUE)
+    endif ()
+    if (LINUX AND NOT USE_OLD_DESTDIR AND USE_OLD_DESTDIR_PREV)
+        set(REGEN_DESTDIR TRUE)
+    endif ()
+elseif ()
+    if (DEFINED AUTOGENERATED_DEP_BUILD_DIR AND BUILD_DEPS)
+        message(WARNING "CMAKE_PREFIX_PATH was manually set. Make sure that DEP_BUILD_DIR is also set to the correct location.")
+    endif ()
+    unset(AUTOGENERATED_PREFIX_PATH CACHE)
 endif ()
+
 
 # Display and check CMAKE_PREFIX_PATH
-message(STATUS "SLIC3R_STATIC: ${SLIC3R_STATIC}")
-if (NOT "${CMAKE_PREFIX_PATH}" STREQUAL "")
+if ("${CMAKE_PREFIX_PATH}" STREQUAL "" OR REGEN_DESTDIR)
+    if (USE_OLD_DESTDIR) # backward compatibility for old directory name
+        set(CMAKE_PREFIX_PATH "${DEP_BUILD_DIR}/destdir/usr/local" CACHE PATH "Path to dependencies" FORCE)
+        message(WARNING "You are using an old directory name for dependencies that is being deprecated. "
+                "Please rename \"destdir\" to \"OrcaSlicer_dep\" or remove the destdir directory and rebuild. "
+                "The current \"destdir\" directory will be used until then.")
+    else ()
+        set(CMAKE_PREFIX_PATH "${DEP_BUILD_DIR}/OrcaSlicer_dep")
+        if (APPLE)
+            set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH}_${CMAKE_OSX_ARCHITECTURES}")
+        endif ()
+        set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH}/usr/local" CACHE PATH "Path to dependencies install directory" FORCE)
+    endif ()
+    message(STATUS "CMAKE_PREFIX_PATH: ${CMAKE_PREFIX_PATH} (generated automatically and saved to cache)")
+    set(PREFIX_PATH_CHECK ${CMAKE_PREFIX_PATH})
+    set(AUTOGENERATED_PREFIX_PATH ${CMAKE_PREFIX_PATH} CACHE STRING "Provides the last autogenerated CMAKE_PREFIX_PATH" FORCE)
+    unset(REGEN_DESTDIR CACHE)
+else ()
     message(STATUS "CMAKE_PREFIX_PATH: ${CMAKE_PREFIX_PATH} (from cache or command line)")
     set(PREFIX_PATH_CHECK ${CMAKE_PREFIX_PATH})
-elseif (NOT "$ENV{CMAKE_PREFIX_PATH}" STREQUAL "")
-    message(STATUS "CMAKE_PREFIX_PATH: $ENV{CMAKE_PREFIX_PATH} (from environment)")
-    set(PREFIX_PATH_CHECK $ENV{CMAKE_PREFIX_PATH})
-else ()
-    message(STATUS "CMAKE_PREFIX_PATH: (default)")
 endif ()
 
+if (LINUX)
+    set(USE_OLD_DESTDIR_PREV ${USE_OLD_DESTDIR} CACHE STRING "Indicates if the old destdir was used during the previous configuration" FORCE)
+endif ()
+
+if ("${DEP_DESTDIR}" STREQUAL "")
+    cmake_path(SET DEP_DESTDIR NORMALIZE "${CMAKE_PREFIX_PATH}/../..")
+endif ()
+
+if (APPLE AND CMAKE_MACOSX_RPATH AND "${CMAKE_INSTALL_RPATH}" STREQUAL "")
+    set(CMAKE_INSTALL_RPATH ${CMAKE_PREFIX_PATH})
+endif ()
+
+# the CMAKE_PREFIX_PATH environment variable is separate from the CMAKE_PREFIX_PATH cache variable and provides additional paths to search for libraries.
+if (NOT "$ENV{CMAKE_PREFIX_PATH}" STREQUAL "")
+    message(STATUS "CMAKE_PREFIX_PATH: $ENV{CMAKE_PREFIX_PATH} (from environment)")
+    list(APPEND PREFIX_PATH_CHECK $ENV{CMAKE_PREFIX_PATH})
+endif ()
+
+# Check all directories in CMAKE_PREFIX_PATH variables
 foreach (DIR ${PREFIX_PATH_CHECK})
     if (NOT EXISTS "${DIR}")
         message(WARNING "CMAKE_PREFIX_PATH element doesn't exist: ${DIR}")
@@ -162,24 +236,65 @@ list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/modules/)
 message(STATUS "PROJECT_SOURCE_DIR: ${PROJECT_SOURCE_DIR}")
 message(STATUS "CMAKE_MODULE_PATH: ${CMAKE_MODULE_PATH}")
 
-enable_testing ()
+if (BUILD_DEPS)
+    include("deps/autobuild.cmake")
+endif ()
+# leaving these in cache could impact the next build
+unset(CLEAN_DEPS CACHE)
+unset(FORCE_DEPS CACHE)
 
-# Enable C++17 language standard.
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-if(NOT WIN32)
-    # Add DEBUG flags to debug builds.
-    add_compile_options("$<$<CONFIG:DEBUG>:-DDEBUG>")
-endif()
+enable_testing()
 
 # To be able to link libslic3r with the Perl XS module.
 # Once we get rid of Perl and libslic3r is linked statically, we can get rid of -fPIC
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# WIN10SDK_PATH is used to point CMake to the WIN10 SDK installation directory.
-# We pick it from environment if it is not defined in another way
 if(WIN32)
+    if (MSVC)
+        if (CLANG)
+            # clang-cl can interpret SYSTEM header paths if -imsvc is used
+            set(CMAKE_INCLUDE_SYSTEM_FLAG_CXX "-imsvc")
+
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall \
+        -Wno-old-style-cast -Wno-reserved-id-macro -Wno-c++98-compat-pedantic")
+        elseif (SLIC3R_MSVC_COMPILE_PARALLEL)
+            add_compile_options(/MP)
+        endif ()
+        # /bigobj (Increase Number of Sections in .Obj file)
+        # error C3859: virtual memory range for PCH exceeded; please recompile with a command line option of '-Zm90' or greater
+        # Generate symbols at every build target, even for the release.
+        add_compile_options(-bigobj -Zm520 /Zi)
+        # Disable STL4007: Many result_type typedefs and all argument_type, first_argument_type, and second_argument_type typedefs are deprecated in C++17.
+        #FIXME Remove this line after eigen library adapts to the new C++17 adaptor rules.
+        add_compile_options(-D_SILENCE_CXX17_ADAPTOR_TYPEDEFS_DEPRECATION_WARNING)
+        # Disable warnings on conversion from unsigned to signed (possible loss of data)
+        # C4244: 'conversion' conversion from 'type1' to 'type2', possible loss of data. An integer type is converted to a smaller integer type.
+        # C4267: The compiler detected a conversion from size_t to a smaller type.
+        add_compile_options(/wd4244 /wd4267)
+        # Disable warnings on comparison of unsigned and signed
+        # C4018: signed/unsigned mismatch
+        add_compile_options(/wd4018)
+        # Add compile option, ignore warning C4305 (truncation from type conversion)
+        add_compile_options(/wd4305)
+        # BOOST_ALL_NO_LIB: Avoid the automatic linking of Boost libraries on Windows. Rather rely on explicit linking.
+        add_definitions(-DBOOST_ALL_NO_LIB -DBOOST_USE_WINAPI_VERSION=0x602 -DBOOST_SYSTEM_USE_UTF8 )
+        # Force the source code encoding to UTF-8. See OrcaSlicer GH pull request #5583
+        add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
+        add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+    else ()
+        # ARMs (Raspberry PI) use an unsigned char by default. Let's make it consistent for OrcaSlicer on all platforms.
+        add_compile_options(-fsigned-char)
+    endif ()
+
+    if (MINGW)
+        add_compile_options(-Wa,-mbig-obj)
+    endif ()
+
+    # Windows specific definitions
+    add_definitions(-D_USE_MATH_DEFINES -D_WIN32 -D_CRT_SECURE_NO_WARNINGS -D_SCL_SECURE_NO_WARNINGS)
+
+    # WIN10SDK_PATH is used to point CMake to the WIN10 SDK installation directory.
+    # We pick it from environment if it is not defined in another way
     if(NOT DEFINED WIN10SDK_PATH)
         if(DEFINED ENV{WIN10SDK_PATH})
                 set(WIN10SDK_PATH "$ENV{WIN10SDK_PATH}")
@@ -190,44 +305,53 @@ if(WIN32)
         if (EXISTS "${WIN10SDK_PATH}/winrt/windows.graphics.printing3d.h")
             set(WIN10SDK_INCLUDE_PATH "${WIN10SDK_PATH}")
         else()
-            message("WIN10SDK_PATH is invalid: ${WIN10SDK_PATH}")
-            message("${WIN10SDK_PATH}/winrt/windows.graphics.printing3d.h was not found")
-            message("STL fixing by the Netfabb service will not be compiled")
+            message(WARNING "WIN10SDK_PATH is invalid: ${WIN10SDK_PATH}")
+            message(WARNING "${WIN10SDK_PATH}/winrt/windows.graphics.printing3d.h was not found")
             unset(WIN10SDK_PATH)
         endif()
     else()
         # Try to use the default Windows 10 SDK path.
-        set(WIN10SDK_INCLUDE_PATH "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}")
+        if (DEFINED ENV{WindowsSdkDir} AND DEFINED ENV{WindowsSDKVersion})
+            set(WIN10SDK_INCLUDE_PATH "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}")
+        else ()
+            set(WIN10SDK_INCLUDE_PATH "C:/Program Files (x86)/Windows Kits/10/Include/10.0.22000.0")
+        endif ()
         if (NOT EXISTS "${WIN10SDK_INCLUDE_PATH}/winrt/windows.graphics.printing3d.h")
-            message("${WIN10SDK_INCLUDE_PATH}/winrt/windows.graphics.printing3d.h was not found")
-            message("STL fixing by the Netfabb service will not be compiled")
+            message(WARNING "${WIN10SDK_INCLUDE_PATH}/winrt/windows.graphics.printing3d.h was not found")
             unset(WIN10SDK_INCLUDE_PATH)
         endif()
     endif()
     if(WIN10SDK_INCLUDE_PATH)
-        message("Building with Win10 Netfabb STL fixing service support")
+        message(STATUS "Building with Win10 Netfabb STL fixing service support")
         add_definitions(-DHAS_WIN10SDK)
         include_directories("${WIN10SDK_INCLUDE_PATH}")
     else()
-        message("Building without Win10 Netfabb STL fixing service support")
+        message(STATUS "Building without Win10 Netfabb STL fixing service support")
     endif()
+else()
+    # Add DEBUG flags to debug builds.
+    add_compile_options("$<$<CONFIG:DEBUG>:-DDEBUG>")
 endif()
 
 if (APPLE)
-    message("OS X SDK Path: ${CMAKE_OSX_SYSROOT}")
+    message(STATUS "OS X SDK Path: ${CMAKE_OSX_SYSROOT}")
     if (CMAKE_OSX_DEPLOYMENT_TARGET)
-        message("OS X Deployment Target: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        message(STATUS "OS X Deployment Target: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
     else ()
-        message("OS X Deployment Target: (default)")
+        message(STATUS "OS X Deployment Target: (default)")
     endif ()
+
+    if (APPLECLANG AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER 15)
+        add_compile_definitions(BOOST_NO_CXX98_FUNCTION_BASE _HAS_AUTO_PTR_ETC=0)
+    endif()
 endif ()
 
-if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if (LINUX)
     find_package(PkgConfig REQUIRED)
 
     if (CMAKE_VERSION VERSION_LESS "3.1")
         # Workaround for an old CMake, which does not understand CMAKE_CXX_STANDARD.
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++${CMAKE_CXX_STANDARD}")
     endif()
 
     # Boost on Raspberry-Pi does not link to pthreads.
@@ -238,12 +362,12 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     include_directories(${DBUS_INCLUDE_DIRS})
 endif()
 
-if (CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_GNUXX)
+if (GNU)
     # Adding -fext-numeric-literals to enable GCC extensions on definitions of quad float literals, which are required by Boost.
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fext-numeric-literals" )
 endif()
 
-if (NOT MSVC AND ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang"))
+if (NOT MSVC AND (GNU OR CLANG_VARIANT))
     if (NOT MINGW)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall" )
     endif ()
@@ -270,18 +394,18 @@ if (NOT MSVC AND ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMP
 
     # removes LOTS of extraneous Eigen warnings (GCC only supports it since 6.1)
     # https://eigen.tuxfamily.org/bz/show_bug.cgi?id=1221
-    if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" OR CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 6.0)
+    if(CLANG_VARIANT OR CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 6.0)
         add_compile_options(-Wno-ignored-attributes) # Tamas: Eigen include dirs are marked as SYSTEM
     endif()
 
     # Clang reports legacy OpenGL calls as deprecated. Turn off the warning for now
     # to reduce the clutter, we know about this one. It should be reenabled after
     # we finally get rid of the deprecated code.
-    if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+    if(CLANG)
         add_compile_options(-Wno-deprecated-declarations)
     endif()
 
-    if (${CMAKE_CXX_COMPILER_ID} STREQUAL "AppleClang" AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER 15)
+    if (APPLECLANG AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER 15)
         add_compile_options(-Wno-error=enum-constexpr-conversion)
     endif()
 
@@ -289,19 +413,18 @@ if (NOT MSVC AND ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMP
     # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=66943 or
     # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=53431
     # We will turn the warning of for GCC for now:
-    if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+    if(GNU)
         # GCC generates loads of -Wunknown-pragmas when compiling igl. The fix is not easy due to a bug in gcc, see
         # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=66943 or
         # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=53431
         # We will turn the warning of for GCC for now:
         add_compile_options(-Wno-unknown-pragmas)
-    endif()
 
-    # Bit of a hack for flatpak building: compress the debug info with zstd to save space in CI 
-    if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 13.0)
-        add_compile_options(-gz=zstd)
+        # Bit of a hack for flatpak building: compress the debug info with zstd to save space in CI
+        if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 13.0)
+            add_compile_options(-gz=zstd)
+        endif()
     endif()
-
 endif()
 
 if (SLIC3R_ASAN)
@@ -318,20 +441,12 @@ if (SLIC3R_ASAN)
         add_compile_definitions(_DISABLE_STRING_ANNOTATION=1 _DISABLE_VECTOR_ANNOTATION=1)
     endif ()
 
-    if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+    if (GNU)
         set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lasan")
     endif ()
-endif ()
-
-if (APPLE)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror=partial-availability -Werror=unguarded-availability -Werror=unguarded-availability-new")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror=partial-availability -Werror=unguarded-availability -Werror=unguarded-availability-new")
 endif ()
-
-if(MSVC)
-# 添加编译选项，忽略警告 C4305 （格式转换截断）
-add_compile_options(/wd4305)
-endif()
 
 # Where all the bundled libraries reside?
 set(LIBDIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -346,24 +461,13 @@ include_directories(${LIBDIR_BIN}/platform)
 # For ligigl
 include_directories(${LIBDIR}/libigl)
 
-if(WIN32)
-    add_definitions(-D_USE_MATH_DEFINES -D_WIN32 -D_CRT_SECURE_NO_WARNINGS -D_SCL_SECURE_NO_WARNINGS)
-    if(MSVC)
-        # BOOST_ALL_NO_LIB: Avoid the automatic linking of Boost libraries on Windows. Rather rely on explicit linking.
-        add_definitions(-DBOOST_ALL_NO_LIB -DBOOST_USE_WINAPI_VERSION=0x602 -DBOOST_SYSTEM_USE_UTF8 )
-        # Force the source code encoding to UTF-8. See OrcaSlicer GH pull request #5583
-        add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
-        add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
-    endif(MSVC)
-endif(WIN32)
-
+## Generic definitions
 add_definitions(-DwxUSE_UNICODE -D_UNICODE -DUNICODE -DWXINTL_NO_GETTEXT_MACRO)
-
 # Disable unsafe implicit wxString to const char* / std::string and vice versa. This implicit conversion breaks the UTF-8 encoding quite often.
 add_definitions(-DwxNO_UNSAFE_WXSTRING_CONV)
 
 if (SLIC3R_PROFILE)
-    message("OrcaSlicer will be built with a Shiny invasive profiler")
+    message(STATUS "OrcaSlicer will be built with a Shiny invasive profiler")
     add_definitions(-DSLIC3R_PROFILE)
 endif ()
 
@@ -468,13 +572,7 @@ find_package(ZLIB REQUIRED)
 target_link_libraries(libcurl INTERFACE ZLIB::ZLIB)
 
 # Fixing curl's cmake config script bugs
-if (NOT WIN32)
-    # Required by libcurl
-    #find_package(ZLIB REQUIRED)
-    #target_link_libraries(libcurl INTERFACE ZLIB::ZLIB)
-    #find_package(Libssh2 REQUIRED)
-    #target_link_libraries(libcurl INTERFACE Libssh2::libssh2)
-else()
+if (WIN32)
     target_link_libraries(libcurl INTERFACE crypt32)
 endif()
 
@@ -484,12 +582,12 @@ if (SLIC3R_STATIC AND NOT SLIC3R_STATIC_EXCLUDE_CURL)
         # On other systems, libcurl is linked statically if SLIC3R_STATIC is set.
         target_compile_definitions(libcurl INTERFACE CURL_STATICLIB)
     endif()
-    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if (LINUX)
         # As of now, our build system produces a statically linked libcurl,
         # which links the OpenSSL library dynamically.
         find_package(OpenSSL REQUIRED)
-        message("OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
-        message("OpenSSL libraries: ${OPENSSL_LIBRARIES}")
+        message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
+        message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
         target_include_directories(libcurl INTERFACE ${OPENSSL_INCLUDE_DIR})
         target_link_libraries(libcurl INTERFACE ${OPENSSL_LIBRARIES})
     endif()
@@ -529,7 +627,7 @@ set(OpenGL_GL_PREFERENCE "LEGACY")
 find_package(OpenGL REQUIRED)
 
 set(GLEW_ROOT "${CMAKE_PREFIX_PATH}")
-message("GLEW_ROOT: ${GLEW_ROOT}")
+message(STATUS "GLEW_ROOT: ${GLEW_ROOT}")
 # Find glew or use bundled version
 if (SLIC3R_STATIC AND NOT SLIC3R_STATIC_EXCLUDE_GLEW)
     set(GLEW_USE_STATIC_LIBS ON)
@@ -637,13 +735,13 @@ function(orcaslicer_copy_dlls target config postfix output_dlls)
 
     if (_alt_out_dir)
         set (_out_dir "${_alt_out_dir}")
-        message ("set out_dir to _alt_out_dir: ${_out_dir}")
+        message (STATUS "set out_dir to _alt_out_dir: ${_out_dir}")
     elseif (_is_multi)
         set(_out_dir "${CMAKE_CURRENT_BINARY_DIR}/${config}")
-        message ("set out_dir to CMAKE_CURRENT_BINARY_DIR/config: ${_out_dir}")
+        message (STATUS "set out_dir to CMAKE_CURRENT_BINARY_DIR/config: ${_out_dir}")
     else ()
         set(_out_dir "${CMAKE_CURRENT_BINARY_DIR}")
-        message ("set out_dir to CMAKE_CURRENT_BINARY_DIR: ${_out_dir}")
+        message (STATUS "set out_dir to CMAKE_CURRENT_BINARY_DIR: ${_out_dir}")
     endif ()
 
     file(COPY ${TOP_LEVEL_PROJECT_DIR}/deps/GMP/gmp/lib/win${_bits}/libgmp-10.dll
