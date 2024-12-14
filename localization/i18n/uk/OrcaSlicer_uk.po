@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2024-09-25 19:57+0800\n"
+"POT-Creation-Date: 2024-12-01 08:07+0100\n"
 "PO-Revision-Date: 2024-06-30 23:05+0300\n"
 "Last-Translator: \n"
 "Language-Team: \n"
@@ -4625,7 +4625,7 @@ msgstr "Вигляд зверху"
 
 #. TRN To be shown in the main menu View->Bottom
 msgid "Bottom"
-msgstr "Ніз"
+msgstr "Низ"
 
 msgid "Bottom View"
 msgstr "Вигляд знизу"
@@ -6457,6 +6457,11 @@ msgstr "Причина: частина “%1%” має самоперетин."
 #, boost-format
 msgid "Reason: \"%1%\" and another part have no intersection."
 msgstr "Причина: “%1%” та інша частина не мають перетину."
+
+msgid ""
+"Unable to perform boolean operation on model meshes. Only positive parts "
+"will be exported."
+msgstr ""
 
 msgid ""
 "Are you sure you want to store original SVGs with their local paths into the "
@@ -10147,7 +10152,9 @@ msgstr "Поріг розвороту звису"
 msgid ""
 "Number of mm the overhang need to be for the reversal to be considered "
 "useful. Can be a % of the perimeter width.\n"
-"Value 0 enables reversal on every even layers regardless."
+"Value 0 enables reversal on every even layers regardless.\n"
+"When Detect overhang wall is not enabled, this option is ignored and "
+"reversal happens on every even layers regardless."
 msgstr ""
 
 msgid "Classic mode"
@@ -12682,6 +12689,14 @@ msgstr "Втягування при зміні шару"
 
 msgid "Force a retraction when changes layer"
 msgstr "Примусове втягування при зміні шару"
+
+msgid "Retract on top layer"
+msgstr ""
+
+msgid ""
+"Force a retraction on top layer. Disabling could prevent clog on very slow "
+"patterns with small movements, like Hilbert curve"
+msgstr ""
 
 msgid "Retraction Length"
 msgstr "Довжина втягування"
