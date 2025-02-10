@@ -284,6 +284,14 @@ static t_config_enum_values s_keys_map_InternalBridgeFilter {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(InternalBridgeFilter)
 
+static t_config_enum_values s_keys_map_EnableExtraBridgeLayer {
+    { "disabled",        eblDisabled },
+    { "external_bridge_only",        eblExternalBridgeOnly },
+    { "internal_bridge_only",        eblInternalBridgeOnly },
+    { "apply_to_all",           eblApplyToAll },
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(EnableExtraBridgeLayer)
+
 // Orca
 static t_config_enum_values s_keys_map_GapFillTarget {
     { "everywhere",        gftEverywhere },
@@ -973,9 +981,25 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionFloat(0.));
 
     def = this->add("bridge_density", coPercent);
-    def->label = L("Bridge density");
+    def->label = L("External bridge density");
     def->category = L("Strength");
-    def->tooltip = L("Density of external bridges. 100% means solid bridge. Default is 100%.");
+    def->tooltip = L("Controls the density (spacing) of external bridge lines. 100% means solid bridge. Default is 100%.\n\n"
+                     "Lower density external bridges can help improve reliability as there is more space for air to circulate "
+                     "around the extruded bridge, improving its cooling speed.");
+    def->sidetext = L("%");
+    def->min = 10;
+    def->max = 100;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(100));
+    
+    def = this->add("internal_bridge_density", coPercent);
+    def->label = L("Internal bridge density");
+    def->category = L("Strength");
+    def->tooltip = L("Controls the density (spacing) of internal bridge lines. 100% means solid bridge. Default is 100%.\n\n "
+                     "Lower density internal bridges can help reduce top surface pillowing and improve internal bridge reliability as there is more space for "
+                     "air to circulate around the extruded bridge, improving its cooling speed. \n\n"
+                     "This option works particularly well when combined with the second internal bridge over infill option, "
+                     "further improving internal bridging structure before solid infill is extruded.");
     def->sidetext = L("%");
     def->min = 10;
     def->max = 100;
@@ -1431,7 +1455,7 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("thick_bridges", coBool);
-    def->label = L("Thick bridges");
+    def->label = L("Thick external bridges");
     def->category = L("Quality");
     def->tooltip = L("If enabled, bridges are more reliable, can bridge longer distances, but may look worse. "
         "If disabled, bridges look better but are reliable just for shorter bridged distances.");
@@ -1445,6 +1469,34 @@ void PrintConfigDef::init_fff_params()
                        "consider turning it off if you are using large nozzles.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
+    
+    def = this->add("enable_extra_bridge_layer", coEnum);
+    def->label = L("Extra bridge layers");
+    def->category = L("Quality");
+    def->tooltip = L("This option enables the generation of an extra bridge layer over internal and/or external bridges.\n\n"
+                     "Extra bridge layers help improve bridge appearance and reliability, as the solid infill is better supported. "
+                     "This is especially useful in fast printers, where the bridge speed and solid infill speed vary greatly."
+                     "The extra bridge layer results in reduced pillowing on top surfaces, as well as, reduced separation of the external bridge layer from its surrounding perimeters. \n\n"
+                     "It is generally recommended to set this to at least External bridge only, unless specific issues with the sliced model are found.\n\n"
+                     "Options:\n"
+                     "1. Disabled - does not generate second bridge layers. This is the default, and set for compatibility purposes.\n"
+                     "2. External bridge only - generates second bridge layers for external facing bridges only. Please note, small bridges that are shorter "
+                     "or narrower than the set number of perimeters will be skipped as they would not benefit from a second bridge layer. The second bridge layer will be extruded "
+                     "parallel to the first bridge layer, to reinforce the bridge strength\n"
+                     "3. Internal bridge only - generates second bridge layers for internal bridges over sparse infill only. Please note that the internal "
+                     "bridges count towards the top shell layer count of your model. The second internal bridge layer will be extruded as close to prependicular to the first as possible.\n"
+                     "4. Apply to all - generates second bridge layers for both internal and external facing bridges\n");
+    def->enum_keys_map = &ConfigOptionEnum<EnableExtraBridgeLayer>::get_enum_values();
+    def->enum_values.push_back("disabled");
+    def->enum_values.push_back("external_bridge_only");
+    def->enum_values.push_back("internal_bridge_only");
+    def->enum_values.push_back("apply_to_all");
+    def->enum_labels.push_back(L("Disabled"));
+    def->enum_labels.push_back(L("External bridge only"));
+    def->enum_labels.push_back(L("Internal bridge only"));
+    def->enum_labels.push_back(L("Apply to all"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<EnableExtraBridgeLayer>(eblDisabled));
 
     def = this->add("dont_filter_internal_bridges", coEnum);
     def->label = L("Filter out small internal bridges (beta)");
