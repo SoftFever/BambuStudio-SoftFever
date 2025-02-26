@@ -750,6 +750,7 @@ void TreeSupport::detect_overhangs(bool detect_first_sharp_tail_only)
     double thresh_angle = config.support_threshold_angle.value > EPSILON ? config.support_threshold_angle.value + 1 : 30;
     thresh_angle = std::min(thresh_angle, 89.); // should be smaller than 90
     const double threshold_rad = Geometry::deg2rad(thresh_angle);
+    const int layer_divider = m_object->config().outer_perimeter_layer_divider;
 
     // for small overhang removal
     struct OverhangCluster {
@@ -853,7 +854,8 @@ void TreeSupport::detect_overhangs(bool detect_first_sharp_tail_only)
                 Layer* layer = m_object->get_layer(layer_nr);
 
                 if (layer->lower_layer == nullptr) {
-                    for (auto& slice : layer->lslices) {
+                    ExPolygons& slices = layer_divider > 1 ? layer->lsub_slices_merged : layer->lslices;
+                    for (auto& slice : slices) {
                         auto bbox_size = get_extents(slice).size();
                         if (!((bbox_size.x() > length_thresh_well_supported && bbox_size.y() > length_thresh_well_supported))
                             && g_config_support_sharp_tails) {
@@ -865,18 +867,20 @@ void TreeSupport::detect_overhangs(bool detect_first_sharp_tail_only)
                 }
 
                 Layer* lower_layer = layer->lower_layer;
+                ExPolygons& lower_slices = layer_divider > 1 ? lower_layer->lsub_slices.back().second : lower_layer->lslices;
                 coordf_t lower_layer_offset = layer_nr < enforce_support_layers ? -0.15 * extrusion_width : (float)lower_layer->height / tan(threshold_rad);
                 coordf_t support_offset_scaled = scale_(lower_layer_offset);
                 // Filter out areas whose diameter that is smaller than extrusion_width. Do not use offset2() for this purpose!
                 ExPolygons lower_polys;
-                for (const ExPolygon& expoly : lower_layer->lslices) {
+                for (const ExPolygon& expoly : lower_slices) {
                     if (!offset_ex(expoly, -extrusion_width_scaled / 2).empty()) {
                         lower_polys.emplace_back(expoly);
                     }
                 }
+                ExPolygons& slices = layer_divider > 1 ? layer->lsub_slices_merged : layer->lslices; 
                 ExPolygons curr_polys;
                 std::vector<const ExPolygon*> curr_poly_ptrs;
-                for (const ExPolygon& expoly : layer->lslices) {
+                for (const ExPolygon& expoly : slices) {
                     if (!offset_ex(expoly, -extrusion_width_scaled / 2).empty()) {
                         curr_polys.emplace_back(expoly);
                         curr_poly_ptrs.emplace_back(&expoly);
@@ -927,7 +931,7 @@ void TreeSupport::detect_overhangs(bool detect_first_sharp_tail_only)
 
                     // check cantilever
                     {
-                        auto cluster_boundary_ex = intersection_ex(poly, offset_ex(lower_layer->lslices, scale_(0.5)));
+                        auto cluster_boundary_ex = intersection_ex(poly, offset_ex(lower_slices, scale_(0.5)));
                         Polygons cluster_boundary = to_polygons(cluster_boundary_ex);
                         if (cluster_boundary.empty()) continue;
                         double dist_max = 0;
@@ -968,7 +972,8 @@ void TreeSupport::detect_overhangs(bool detect_first_sharp_tail_only)
             // BBS detect sharp tail
             const ExPolygons& lower_layer_sharptails = lower_layer->sharp_tails;
             const auto& lower_layer_sharptails_height = lower_layer->sharp_tails_height;
-            for (ExPolygon& expoly : layer->lslices) {
+            ExPolygons& slices = layer_divider > 1 ? layer->lsub_slices_merged : layer->lslices;
+            for (ExPolygon& expoly : slices) {
                 bool  is_sharp_tail = false;
                 float accum_height = layer->height;
                 do {
@@ -1022,7 +1027,8 @@ void TreeSupport::detect_overhangs(bool detect_first_sharp_tail_only)
                 } while (0);
 
                 if (is_sharp_tail) {
-                    ExPolygons overhang = diff_ex({ expoly }, lower_layer->lslices);
+                    ExPolygons& lower_slices = layer_divider > 1 ? lower_layer->lsub_slices.back().second : lower_layer->lslices;
+                    ExPolygons overhang = diff_ex({ expoly }, lower_slices);
                     layer->sharp_tails.push_back(expoly);
                     layer->sharp_tails_height.insert({ &expoly, accum_height });
                     append(ts_layer->overhang_areas, overhang);
@@ -1113,13 +1119,15 @@ void TreeSupport::detect_overhangs(bool detect_first_sharp_tail_only)
         SupportLayer* ts_layer = m_object->get_support_layer(layer_nr + m_raft_layers);
         auto layer = m_object->get_layer(layer_nr);
         auto lower_layer = layer->lower_layer;
+        
         if (support_critical_regions_only && is_auto(stype)) {
             ts_layer->overhang_areas.clear();
-            if (lower_layer == nullptr)
+            if (lower_layer == nullptr) {
                 ts_layer->overhang_areas = layer->sharp_tails;
-            else
-                ts_layer->overhang_areas = diff_ex(layer->sharp_tails, lower_layer->lslices);
-
+            } else {
+                ExPolygons& lower_slices = layer_divider > 1 ? lower_layer->lsub_slices.back().second : lower_layer->lslices;
+                ts_layer->overhang_areas = diff_ex(layer->sharp_tails, lower_slices);
+            }
             append(ts_layer->overhang_areas, layer->cantilevers);
         }
 
@@ -1143,10 +1151,12 @@ void TreeSupport::detect_overhangs(bool detect_first_sharp_tail_only)
         if (layer_nr < enforcers.size() && lower_layer) {
             float no_interface_offset = std::accumulate(layer->regions().begin(), layer->regions().end(), FLT_MAX,
                 [](float acc, const LayerRegion* layerm) { return std::min(acc, float(layerm->flow(frExternalPerimeter).scaled_width())); });
-            Polygons  lower_layer_polygons = (layer_nr == 0) ? Polygons() : to_polygons(lower_layer->lslices);
+            ExPolygons& lower_slices = layer_divider > 1 ? lower_layer->lsub_slices.back().second : lower_layer->lslices;
+            Polygons  lower_layer_polygons = (layer_nr == 0) ? Polygons() : to_polygons(lower_slices);
             Polygons& enforcer = enforcers[layer_nr];
             if (!enforcer.empty()) {
-                ExPolygons enforcer_polygons = diff_ex(intersection_ex(layer->lslices, enforcer),
+                ExPolygons& slices = layer_divider > 1 ? layer->lsub_slices_merged : layer->lslices;
+                ExPolygons enforcer_polygons = diff_ex(intersection_ex(slices, enforcer),
                     // Inflate just a tiny bit to avoid intersection of the overhang areas with the object.
                     expand(lower_layer_polygons, 0.05f * no_interface_offset, SUPPORT_SURFACES_OFFSET_PARAMETERS));
                 append(ts_layer->overhang_areas, enforcer_polygons);
@@ -1409,6 +1419,7 @@ void TreeSupport::generate_toolpaths()
     coordf_t nozzle_diameter = m_print_config->nozzle_diameter.get_at(object_config.support_filament - 1);
     coordf_t layer_height = object_config.layer_height.value;
     const size_t wall_count = object_config.tree_support_wall_count.value;
+    const int layer_divider = object_config.outer_perimeter_layer_divider;
 
     // Check if set to zero, use default if so.
     if (support_extrusion_width <= 0.0)
@@ -1431,7 +1442,8 @@ void TreeSupport::generate_toolpaths()
     ExPolygons raft_areas;
     if (m_object->layer_count() > 0) {
         const Layer *layer = m_object->layers().front();
-        for (const ExPolygon &expoly : layer->lslices) {
+        const ExPolygons& slices = layer_divider > 1 ? layer->lsub_slices.front().second : layer->lslices;
+        for (const ExPolygon &expoly : slices) {
             raft_areas.push_back(expoly);
         }
     }
@@ -2017,6 +2029,7 @@ Polygons TreeSupport::get_trim_support_regions(
     double gap_xy_scaled = scale_(gap_xy);
     SupportLayer& support_layer = *support_layer_ptr;
     auto m_print_config = object.print()->config();
+    const int layer_divider = object.config().outer_perimeter_layer_divider;
 
     size_t idx_object_layer_overlapping = size_t(-1);
 
@@ -2048,7 +2061,8 @@ Polygons TreeSupport::get_trim_support_regions(
             break;
 
         bool is_overlap = is_layers_overlap(support_layer, object_layer);
-        for (const ExPolygon& expoly : object_layer.lslices) {
+        const ExPolygons& slices = layer_divider > 1 ? object_layer.lsub_slices_merged : object_layer.lslices;
+        for (const ExPolygon& expoly : slices) {
             // BBS
             bool is_sharptail = !intersection_ex({ expoly }, object_layer.sharp_tails).empty();
             coordf_t trimming_offset = is_sharptail ? scale_(sharp_tail_xy_gap) :
@@ -2131,6 +2145,7 @@ void TreeSupport::draw_circles(const std::vector<std::vector<Node*>>& contact_no
     const size_t wall_count = config.tree_support_wall_count.value;
 
     const PrintObjectConfig& object_config = m_object->config();
+    const int layer_divider = object_config.outer_perimeter_layer_divider;
     BOOST_LOG_TRIVIAL(info) << "draw_circles for object: " << m_object->model_object()->name;
 
     // coconut: previously std::unordered_map in m_collision_cache is not multi-thread safe which may cause programs stuck, here we change to tbb::concurrent_unordered_map
@@ -2319,7 +2334,8 @@ void TreeSupport::draw_circles(const std::vector<std::vector<Node*>>& contact_no
                         for (size_t i = 0; i <= bottom_gap_layers; i++)
                         {
                             const Layer* below_layer = m_object->get_layer(layer_nr - bottom_interface_layers - i);
-                            ExPolygons bottom_interface = intersection_ex(base_areas, below_layer->lslices);
+                            const ExPolygons& slices = layer_divider > 1 ? below_layer->lsub_slices.back().second : below_layer->lslices;
+                            ExPolygons bottom_interface = intersection_ex(base_areas, slices);
                             floor_areas.insert(floor_areas.end(), bottom_interface.begin(), bottom_interface.end());
                         }
                     }
@@ -2331,7 +2347,8 @@ void TreeSupport::draw_circles(const std::vector<std::vector<Node*>>& contact_no
                 }
                 if (bottom_gap_layers > 0 && layer_nr > bottom_gap_layers) {
                     const Layer* below_layer = m_object->get_layer(layer_nr - bottom_gap_layers);
-                    ExPolygons bottom_gap_area = intersection_ex(floor_areas, below_layer->lslices);
+                    const ExPolygons& slices = layer_divider > 1 ? below_layer->lsub_slices.back().second : below_layer->lslices;
+                    ExPolygons bottom_gap_area = intersection_ex(floor_areas, slices);
                     if (!bottom_gap_area.empty()) {
                         floor_areas = std::move(diff_ex(floor_areas, bottom_gap_area));
                     }
@@ -3591,9 +3608,11 @@ TreeSupportData::TreeSupportData(const PrintObject &object, coordf_t xy_distance
     for (std::size_t layer_nr  = 0; layer_nr < object.layers().size(); ++layer_nr)
     {
         const Layer* layer = object.get_layer(layer_nr);
+        const int    layer_divider = object.config().outer_perimeter_layer_divider;
+        const ExPolygons& slices = layer_divider > 1 ? layer->lsub_slices_merged : layer->lslices;
         m_layer_outlines.push_back(ExPolygons());
         ExPolygons& outline = m_layer_outlines.back();
-        for (const ExPolygon& poly : layer->lslices) {
+        for (const ExPolygon& poly : slices) {
             poly.simplify(scale_(m_radius_sample_resolution), &outline);
         }
 
